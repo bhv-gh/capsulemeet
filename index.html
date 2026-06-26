@@ -104,6 +104,11 @@
             <video id="lobbyLocalVideo" autoplay playsinline muted class="w-96 h-72 object-cover rounded-lg mb-6"></video>
             <input type="text" id="roomCodeInput" placeholder="Enter 4-digit code" class="px-6 py-3 rounded-lg bg-gray-800 text-white text-2xl font-bold text-center border focus:outline-none focus:border-blue-500 w-64">
             <button id="joinBtn" class="px-8 py-3 bg-blue-500 hover:bg-blue-600 rounded-lg text-xl font-bold transition-colors w-64">Start / Join</button>
+            
+            <div id="availableRoomsContainer" class="hidden mt-6 flex flex-col items-center">
+                <span class="text-gray-400 mb-4 text-lg">Or quickly join an active call:</span>
+                <div id="availableRoomsList" class="flex gap-4 flex-wrap justify-center"></div>
+            </div>
         </div>
     </div>
 
@@ -118,7 +123,7 @@
         <div class="fixed bottom-0 left-0 right-0 h-24 bg-gradient-to-t from-black to-transparent flex items-center justify-center gap-4 pb-4 z-50">
             <button id="muteBtn" class="px-6 py-3 bg-gray-800 hover:bg-gray-700 rounded-full font-bold">🎤 Mute</button>
             <button id="videoBtn" class="px-6 py-3 bg-gray-800 hover:bg-gray-700 rounded-full font-bold">📸 Cam Off</button>
-            <button id="layoutBtn" class="px-6 py-3 bg-purple-600 hover:bg-purple-700 rounded-full font-bold text-white transition-colors">🎛 Grid View</button>
+            <button id="layoutBtn" class="px-6 py-3 bg-purple-600 hover:bg-purple-700 rounded-full font-bold text-white transition-colors">🗣 Speaker View</button>
             <button id="hangupBtn" class="px-6 py-3 bg-red-600 hover:bg-red-700 rounded-full font-bold">❌ Hang Up</button>
         </div>
         
@@ -179,6 +184,34 @@
         const remoteVideosGrid = document.getElementById('remoteVideos');
         const roomBadge = document.getElementById('roomBadge');
         const networkStatus = document.getElementById('networkStatus');
+
+        const availableRoomsContainer = document.getElementById('availableRoomsContainer');
+        const availableRoomsList = document.getElementById('availableRoomsList');
+
+        // Listen for active rooms globally to show in the lobby
+        onSnapshot(collection(db, "calls"), (snapshot) => {
+            const rooms = [];
+            snapshot.forEach((doc) => {
+                rooms.push(doc.id);
+            });
+            
+            if (rooms.length > 0) {
+                availableRoomsContainer.classList.remove('hidden');
+                availableRoomsList.innerHTML = '';
+                rooms.forEach(roomId => {
+                    const btn = document.createElement('button');
+                    btn.className = "px-6 py-2 bg-green-600 hover:bg-green-700 rounded-lg text-white font-bold transition-colors";
+                    btn.innerText = `Join ${roomId}`;
+                    btn.onclick = () => {
+                        roomCodeInput.value = roomId;
+                        joinRoom(roomId);
+                    };
+                    availableRoomsList.appendChild(btn);
+                });
+            } else {
+                availableRoomsContainer.classList.add('hidden');
+            }
+        });
 
         async function initLocalMedia() {
             try {
@@ -418,12 +451,12 @@
         document.getElementById('layoutBtn').addEventListener('click', (e) => {
             if (layoutMode === 'GRID') {
                 layoutMode = 'SPEAKER';
-                e.target.innerText = "🗣 Speaker View";
+                e.target.innerText = "🎛 Grid View";
                 callScreen.classList.remove('layout-grid');
                 callScreen.classList.add('layout-speaker');
             } else {
                 layoutMode = 'GRID';
-                e.target.innerText = "🎛 Grid View";
+                e.target.innerText = "🗣 Speaker View";
                 callScreen.classList.remove('layout-speaker');
                 callScreen.classList.add('layout-grid');
                 highlightedParticipantId = null; // Reset highlight
@@ -452,7 +485,7 @@
             
             // Reset to default Grid Mode
             layoutMode = 'GRID';
-            document.getElementById('layoutBtn').innerText = "🎛 Grid View";
+            document.getElementById('layoutBtn').innerText = "🗣 Speaker View";
             callScreen.classList.remove('layout-speaker');
             callScreen.classList.add('layout-grid');
             
