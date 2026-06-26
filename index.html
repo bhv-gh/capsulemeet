@@ -6,26 +6,79 @@
     <title>CapsuleMeet Web</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { background-color: #000; color: #fff; font-family: system-ui, -apple-system, sans-serif; }
-        .video-grid {
-            display: grid;
-            gap: 1rem;
+        body { background-color: #000; color: #fff; font-family: system-ui, -apple-system, sans-serif; overflow: hidden; }
+        
+        /* Base Video Container Setup */
+        #remoteVideos {
             width: 100%;
             height: calc(100vh - 120px);
             padding: 1rem;
+            box-sizing: border-box;
+        }
+        #remoteVideos video {
+            background-color: #111;
+            border-radius: 0.5rem;
+            transition: all 0.3s ease;
+        }
+
+        /* ================================== */
+        /* GRID MODE (Default)                */
+        /* ================================== */
+        .layout-grid #remoteVideos {
+            display: grid;
+            gap: 1rem;
         }
         /* Dynamic grid sizing based on child count */
-        .video-grid[data-count="1"] { grid-template-columns: 1fr; }
-        .video-grid[data-count="2"] { grid-template-columns: 1fr 1fr; }
-        .video-grid[data-count="3"], .video-grid[data-count="4"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
-        
-        video {
+        .layout-grid #remoteVideos[data-count="1"] { grid-template-columns: 1fr; }
+        .layout-grid #remoteVideos[data-count="2"] { grid-template-columns: 1fr 1fr; }
+        .layout-grid #remoteVideos[data-count="3"], .layout-grid #remoteVideos[data-count="4"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+        .layout-grid #remoteVideos video {
             width: 100%;
             height: 100%;
             object-fit: contain;
-            background-color: #111;
-            border-radius: 0.5rem;
         }
+
+        /* ================================== */
+        /* SPEAKER MODE                       */
+        /* ================================== */
+        .layout-speaker #remoteVideos {
+            display: flex;
+            justify-content: center;
+            align-items: flex-end;
+            gap: 1rem;
+            position: relative;
+            padding-bottom: 2rem;
+        }
+        .layout-speaker #remoteVideos video {
+            width: 200px;
+            height: 150px;
+            object-fit: cover;
+            z-index: 10;
+            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.8);
+        }
+        .layout-speaker #remoteVideos video:hover {
+            transform: scale(1.05);
+            border: 2px solid white;
+        }
+        .layout-speaker #remoteVideos video.main-speaker {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            z-index: 1;
+            cursor: default;
+            border-radius: 0;
+            box-shadow: none;
+            border: none;
+        }
+        .layout-speaker #remoteVideos video.main-speaker:hover {
+            transform: none;
+        }
+
+        /* Local Video Picture-in-Picture */
         .local-video-container {
             position: fixed;
             bottom: 120px;
@@ -54,21 +107,22 @@
         </div>
     </div>
 
-    <!-- Active Call Screen -->
-    <div id="callScreen" class="hidden flex-col min-h-screen">
-        <div id="remoteVideos" class="video-grid" data-count="0"></div>
+    <!-- Active Call Screen (Defaults to layout-grid) -->
+    <div id="callScreen" class="hidden flex-col min-h-screen layout-grid">
+        <div id="remoteVideos" data-count="0"></div>
         
         <div class="local-video-container">
             <video id="activeLocalVideo" autoplay playsinline muted></video>
         </div>
 
-        <div class="fixed bottom-0 left-0 right-0 h-24 bg-gradient-to-t from-black to-transparent flex items-center justify-center gap-4 pb-4">
+        <div class="fixed bottom-0 left-0 right-0 h-24 bg-gradient-to-t from-black to-transparent flex items-center justify-center gap-4 pb-4 z-50">
             <button id="muteBtn" class="px-6 py-3 bg-gray-800 hover:bg-gray-700 rounded-full font-bold">🎤 Mute</button>
             <button id="videoBtn" class="px-6 py-3 bg-gray-800 hover:bg-gray-700 rounded-full font-bold">📸 Cam Off</button>
+            <button id="layoutBtn" class="px-6 py-3 bg-purple-600 hover:bg-purple-700 rounded-full font-bold text-white transition-colors">🎛 Grid View</button>
             <button id="hangupBtn" class="px-6 py-3 bg-red-600 hover:bg-red-700 rounded-full font-bold">❌ Hang Up</button>
         </div>
         
-        <div class="fixed bottom-6 left-6 px-4 py-2 bg-black bg-opacity-70 rounded-lg flex flex-col">
+        <div class="fixed bottom-6 left-6 px-4 py-2 bg-black bg-opacity-70 rounded-lg flex flex-col z-50">
             <span class="font-bold text-lg" id="roomBadge">Room: ----</span>
             <span class="text-xs text-gray-400" id="networkStatus">Connecting...</span>
         </div>
@@ -79,9 +133,6 @@
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, query, where, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // ==========================================
-        // Firebase Config
-        // ==========================================
         const firebaseConfig = {
             apiKey: "AIzaSyDgmFflkwG7QJy48BmUSr5hNRbcuXpWi04",
             authDomain: "capsulemeet.firebaseapp.com",
@@ -90,7 +141,6 @@
             messagingSenderId: "764330194233",
             appId: "1:764330194233:android:a6a4cce724208b355824e8"
         };
-        // ==========================================
 
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
@@ -105,6 +155,10 @@
         let localStream = null;
         let isAudioMuted = false;
         let isVideoMuted = false;
+        
+        // NEW: Layout Control State
+        let layoutMode = 'GRID';
+        let highlightedParticipantId = null;
         
         const peerConnections = {};
         const remoteStreams = {};
@@ -197,9 +251,7 @@
 
             localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
-            // Network debugging for mobile
             pc.oniceconnectionstatechange = () => {
-                console.log(`ICE State (${participantId}):`, pc.iceConnectionState);
                 networkStatus.innerText = `Network: ${pc.iceConnectionState}`;
                 if (pc.iceConnectionState === "failed") {
                     networkStatus.innerText = "Network: FAILED (Try Cellular Data!)";
@@ -223,16 +275,21 @@
             };
 
             pc.ontrack = (event) => {
-                console.log("Received remote track from", participantId);
-                
                 let videoEl = document.getElementById(`video-${participantId}`);
                 if (!videoEl) {
                     videoEl = document.createElement('video');
                     videoEl.id = `video-${participantId}`;
                     videoEl.autoplay = true;
-                    // THE MOBILE FIX: Strict playsinline attribute creation required for iOS
                     videoEl.setAttribute('playsinline', ''); 
                     
+                    // NEW: Allow swapping speakers by clicking a video
+                    videoEl.onclick = () => {
+                        if (layoutMode === 'SPEAKER') {
+                            highlightedParticipantId = participantId;
+                            updateLayout();
+                        }
+                    };
+
                     remoteVideosGrid.appendChild(videoEl);
                     updateGridSizing();
                 }
@@ -247,12 +304,8 @@
                     videoEl.srcObject = remoteStreams[participantId];
                 }
 
-                // THE MOBILE FIX: Explicitly force play once metadata loads
                 videoEl.onloadedmetadata = () => {
-                    videoEl.play().catch(e => {
-                        console.error("Mobile Autoplay Blocked:", e);
-                        // Optional fallback: User tap required if browser strictly blocks it
-                    });
+                    videoEl.play().catch(console.error);
                 };
             };
 
@@ -318,6 +371,9 @@
             const videoEl = document.getElementById(`video-${participantId}`);
             if (videoEl) {
                 videoEl.remove();
+                if (highlightedParticipantId === participantId) {
+                    highlightedParticipantId = null;
+                }
                 updateGridSizing();
             }
             networkStatus.innerText = "Participant left";
@@ -328,10 +384,52 @@
             await addDoc(collection(db, "calls", currentRoomId, "signals"), payload);
         }
 
+        // NEW: Layout Control Functions
         function updateGridSizing() {
             const count = remoteVideosGrid.children.length;
             remoteVideosGrid.setAttribute('data-count', count.toString());
+            updateLayout(); 
         }
+
+        function updateLayout() {
+            const videos = Array.from(remoteVideosGrid.children);
+            if (videos.length === 0) return;
+
+            if (layoutMode === 'SPEAKER') {
+                // Determine who is highlighted, default to first person if unset
+                if (!highlightedParticipantId || !document.getElementById(`video-${highlightedParticipantId}`)) {
+                    highlightedParticipantId = videos[0].id.replace('video-', '');
+                }
+
+                videos.forEach(v => {
+                    if (v.id === `video-${highlightedParticipantId}`) {
+                        v.classList.add('main-speaker');
+                    } else {
+                        v.classList.remove('main-speaker');
+                    }
+                });
+            } else {
+                // Clear any speaker highlights for standard Grid Mode
+                videos.forEach(v => v.classList.remove('main-speaker'));
+            }
+        }
+
+        // Layout Toggle Event Listener
+        document.getElementById('layoutBtn').addEventListener('click', (e) => {
+            if (layoutMode === 'GRID') {
+                layoutMode = 'SPEAKER';
+                e.target.innerText = "🗣 Speaker View";
+                callScreen.classList.remove('layout-grid');
+                callScreen.classList.add('layout-speaker');
+            } else {
+                layoutMode = 'GRID';
+                e.target.innerText = "🎛 Grid View";
+                callScreen.classList.remove('layout-speaker');
+                callScreen.classList.add('layout-grid');
+                highlightedParticipantId = null; // Reset highlight
+            }
+            updateLayout();
+        });
 
         async function hangUp() {
             if (currentRoomId) {
@@ -348,8 +446,15 @@
             if (signalsUnsubscribe) signalsUnsubscribe();
             
             currentRoomId = null;
+            highlightedParticipantId = null;
             networkStatus.innerText = "";
             networkStatus.classList.remove("text-red-500", "text-green-500");
+            
+            // Reset to default Grid Mode
+            layoutMode = 'GRID';
+            document.getElementById('layoutBtn').innerText = "🎛 Grid View";
+            callScreen.classList.remove('layout-speaker');
+            callScreen.classList.add('layout-grid');
             
             callScreen.classList.add('hidden');
             callScreen.classList.remove('flex');
@@ -381,7 +486,6 @@
         });
 
         initLocalMedia();
-
         window.addEventListener('beforeunload', hangUp);
     </script>
 </body>
