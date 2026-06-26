@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CapsuleMeet Web</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #000; color: #fff; font-family: system-ui, -apple-system, sans-serif; }
+        .video-grid {
+            display: grid;
+            gap: 1rem;
+            width: 100%;
+            height: calc(100vh - 120px);
+            padding: 1rem;
+        }
+        /* Dynamic grid sizing based on child count */
+        .video-grid[data-count="1"] { grid-template-columns: 1fr; }
+        .video-grid[data-count="2"] { grid-template-columns: 1fr 1fr; }
+        .video-grid[data-count="3"], .video-grid[data-count="4"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+        
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            background-color: #111;
+            border-radius: 0.5rem;
+        }
+        .local-video-container {
+            position: fixed;
+            bottom: 120px;
+            right: 32px;
+            width: 240px;
+            height: 180px;
+            border-radius: 0.5rem;
+            overflow: hidden;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+            z-index: 50;
+            background: #222;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Lobby Screen -->
+    <div id="lobbyScreen" class="flex flex-col items-center justify-center min-h-screen">
+        <h1 class="text-4xl font-bold mb-8">CapsuleMeet Web</h1>
+        <div id="setupMessage" class="text-gray-400 mb-6 text-xl">Requesting camera permissions...</div>
+        
+        <div id="joinControls" class="hidden flex-col items-center gap-4">
+            <video id="lobbyLocalVideo" autoplay playsinline muted class="w-96 h-72 object-cover rounded-lg mb-6"></video>
+            <input type="text" id="roomCodeInput" placeholder="Enter 4-digit code" class="px-6 py-3 rounded-lg bg-gray-800 text-white text-2xl font-bold text-center border focus:outline-none focus:border-blue-500 w-64">
+            <button id="joinBtn" class="px-8 py-3 bg-blue-500 hover:bg-blue-600 rounded-lg text-xl font-bold transition-colors w-64">Start / Join</button>
+        </div>
+    </div>
+
+    <!-- Active Call Screen -->
+    <div id="callScreen" class="hidden flex-col min-h-screen">
+        <div id="remoteVideos" class="video-grid" data-count="0"></div>
+        
+        <div class="local-video-container">
+            <video id="activeLocalVideo" autoplay playsinline muted></video>
+        </div>
+
+        <div class="fixed bottom-0 left-0 right-0 h-24 bg-gradient-to-t from-black to-transparent flex items-center justify-center gap-4 pb-4">
+            <button id="muteBtn" class="px-6 py-3 bg-gray-800 hover:bg-gray-700 rounded-full font-bold">🎤 Mute</button>
+            <button id="videoBtn" class="px-6 py-3 bg-gray-800 hover:bg-gray-700 rounded-full font-bold">📸 Cam Off</button>
+            <button id="hangupBtn" class="px-6 py-3 bg-red-600 hover:bg-red-700 rounded-full font-bold">❌ Hang Up</button>
+        </div>
+        
+        <div class="fixed bottom-6 left-6 px-4 py-2 bg-black bg-opacity-70 rounded-lg flex flex-col">
+            <span class="font-bold text-lg" id="roomBadge">Room: ----</span>
+            <span class="text-xs text-gray-400" id="networkStatus">Connecting...</span>
+        </div>
+    </div>
+
+    <!-- The WebRTC + Firebase Engine -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, query, where, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // ==========================================
+        // Firebase Config
+        // ==========================================
+        const firebaseConfig = {
+            apiKey: "AIzaSyDgmFflkwG7QJy48BmUSr5hNRbcuXpWi04",
+            authDomain: "capsulemeet.firebaseapp.com",
+            projectId: "capsulemeet",
+            storageBucket: "capsulemeet.firebasestorage.app",
+            messagingSenderId: "764330194233",
+            appId: "1:764330194233:android:a6a4cce724208b355824e8"
+        };
+        // ==========================================
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        let myUserId = localStorage.getItem('capsulemeet_user_id');
+        if (!myUserId) {
+            myUserId = crypto.randomUUID();
+            localStorage.setItem('capsulemeet_user_id', myUserId);
+        }
+
+        let currentRoomId = null;
+        let localStream = null;
+        let isAudioMuted = false;
+        let isVideoMuted = false;
+        
+        const peerConnections = {};
+        const remoteStreams = {};
+        const pendingIceCandidates = {}; 
+        
+        let participantsUnsubscribe = null;
+        let signalsUnsubscribe = null;
+
+        const ICE_SERVERS = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
+        const lobbyScreen = document.getElementById('lobbyScreen');
+        const callScreen = document.getElementById('callScreen');
+        const setupMessage = document.getElementById('setupMessage');
+        const joinControls = document.getElementById('joinControls');
+        const roomCodeInput = document.getElementById('roomCodeInput');
+        const lobbyLocalVideo = document.getElementById('lobbyLocalVideo');
+        const activeLocalVideo = document.getElementById('activeLocalVideo');
+        const remoteVideosGrid = document.getElementById('remoteVideos');
+        const roomBadge = document.getElementById('roomBadge');
+        const networkStatus = document.getElementById('networkStatus');
+
+        async function initLocalMedia() {
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                lobbyLocalVideo.srcObject = localStream;
+                activeLocalVideo.srcObject = localStream;
+                setupMessage.classList.add('hidden');
+                joinControls.classList.remove('hidden');
+                joinControls.classList.add('flex');
+            } catch (e) {
+                console.error("Camera error:", e);
+                setupMessage.innerText = "Error accessing camera/microphone. Please allow permissions. Make sure you are using HTTPS.";
+            }
+        }
+
+        async function joinRoom(roomId) {
+            currentRoomId = roomId;
+            roomBadge.innerText = `Room: ${roomId}`;
+            networkStatus.innerText = "Connecting to signaling server...";
+            
+            lobbyScreen.classList.add('hidden');
+            callScreen.classList.remove('hidden');
+            callScreen.classList.add('flex');
+
+            const roomRef = doc(db, "calls", roomId);
+            const myParticipantRef = doc(roomRef, "participants", myUserId);
+            
+            await setDoc(roomRef, { createdAt: Date.now() }, { merge: true });
+            await setDoc(myParticipantRef, { joinedAt: Date.now() });
+
+            participantsUnsubscribe = onSnapshot(collection(roomRef, "participants"), (snapshot) => {
+                snapshot.docChanges().forEach((change) => {
+                    const participantId = change.doc.id;
+                    if (participantId === myUserId) return;
+
+                    if (change.type === "added" || change.type === "modified") {
+                        handleParticipantJoined(participantId);
+                    }
+                    if (change.type === "removed") {
+                        handleParticipantLeft(participantId);
+                    }
+                });
+            });
+
+            const signalsQuery = query(collection(roomRef, "signals"), where("to", "==", myUserId));
+            signalsUnsubscribe = onSnapshot(signalsQuery, (snapshot) => {
+                snapshot.docChanges().forEach((change) => {
+                    if (change.type === "added") {
+                        handleIncomingSignal(change.doc.data(), change.doc.ref);
+                    }
+                });
+            });
+        }
+
+        async function handleParticipantJoined(participantId) {
+            if (peerConnections[participantId]) handleParticipantLeft(participantId);
+
+            const pc = createPeerConnection(participantId);
+            
+            if (myUserId > participantId) {
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+                sendSignal({ to: participantId, type: "offer", sdp: pc.localDescription.sdp });
+            }
+        }
+
+        function createPeerConnection(participantId) {
+            const pc = new RTCPeerConnection(ICE_SERVERS);
+            peerConnections[participantId] = pc;
+
+            localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+            // Network debugging for mobile
+            pc.oniceconnectionstatechange = () => {
+                console.log(`ICE State (${participantId}):`, pc.iceConnectionState);
+                networkStatus.innerText = `Network: ${pc.iceConnectionState}`;
+                if (pc.iceConnectionState === "failed") {
+                    networkStatus.innerText = "Network: FAILED (Try Cellular Data!)";
+                    networkStatus.classList.add("text-red-500");
+                } else if (pc.iceConnectionState === "connected") {
+                    networkStatus.classList.remove("text-red-500");
+                    networkStatus.classList.add("text-green-500");
+                }
+            };
+
+            pc.onicecandidate = (event) => {
+                if (event.candidate) {
+                    sendSignal({
+                        to: participantId,
+                        type: "candidate",
+                        sdpMid: event.candidate.sdpMid,
+                        sdpMLineIndex: event.candidate.sdpMLineIndex,
+                        candidate: event.candidate.candidate
+                    });
+                }
+            };
+
+            pc.ontrack = (event) => {
+                console.log("Received remote track from", participantId);
+                
+                let videoEl = document.getElementById(`video-${participantId}`);
+                if (!videoEl) {
+                    videoEl = document.createElement('video');
+                    videoEl.id = `video-${participantId}`;
+                    videoEl.autoplay = true;
+                    // THE MOBILE FIX: Strict playsinline attribute creation required for iOS
+                    videoEl.setAttribute('playsinline', ''); 
+                    
+                    remoteVideosGrid.appendChild(videoEl);
+                    updateGridSizing();
+                }
+                
+                if (event.streams && event.streams[0]) {
+                    videoEl.srcObject = event.streams[0];
+                } else {
+                    if (!remoteStreams[participantId]) {
+                        remoteStreams[participantId] = new MediaStream();
+                    }
+                    remoteStreams[participantId].addTrack(event.track);
+                    videoEl.srcObject = remoteStreams[participantId];
+                }
+
+                // THE MOBILE FIX: Explicitly force play once metadata loads
+                videoEl.onloadedmetadata = () => {
+                    videoEl.play().catch(e => {
+                        console.error("Mobile Autoplay Blocked:", e);
+                        // Optional fallback: User tap required if browser strictly blocks it
+                    });
+                };
+            };
+
+            return pc;
+        }
+
+        async function handleIncomingSignal(data, docRef) {
+            const { from: participantId, type } = data;
+            
+            deleteDoc(docRef).catch(console.error);
+
+            const pc = peerConnections[participantId] || createPeerConnection(participantId);
+
+            if (type === "offer") {
+                await pc.setRemoteDescription(new RTCSessionDescription({ type: "offer", sdp: data.sdp }));
+                drainPendingIceCandidates(participantId, pc); 
+                
+                const answer = await pc.createAnswer();
+                await pc.setLocalDescription(answer);
+                sendSignal({ to: participantId, type: "answer", sdp: pc.localDescription.sdp });
+            } 
+            else if (type === "answer") {
+                await pc.setRemoteDescription(new RTCSessionDescription({ type: "answer", sdp: data.sdp }));
+                drainPendingIceCandidates(participantId, pc); 
+            } 
+            else if (type === "candidate") {
+                const candidate = new RTCIceCandidate({
+                    sdpMid: data.sdpMid,
+                    sdpMLineIndex: data.sdpMLineIndex,
+                    candidate: data.candidate
+                });
+                
+                if (pc.remoteDescription && pc.remoteDescription.type) {
+                    await pc.addIceCandidate(candidate).catch(console.error);
+                } else {
+                    if (!pendingIceCandidates[participantId]) pendingIceCandidates[participantId] = [];
+                    pendingIceCandidates[participantId].push(candidate);
+                }
+            }
+        }
+
+        async function drainPendingIceCandidates(participantId, pc) {
+            if (pendingIceCandidates[participantId]) {
+                for (const candidate of pendingIceCandidates[participantId]) {
+                    await pc.addIceCandidate(candidate).catch(console.error);
+                }
+                pendingIceCandidates[participantId] = [];
+            }
+        }
+
+        function handleParticipantLeft(participantId) {
+            if (peerConnections[participantId]) {
+                peerConnections[participantId].close();
+                delete peerConnections[participantId];
+            }
+            if (remoteStreams[participantId]) {
+                delete remoteStreams[participantId];
+            }
+            if (pendingIceCandidates[participantId]) {
+                delete pendingIceCandidates[participantId];
+            }
+            
+            const videoEl = document.getElementById(`video-${participantId}`);
+            if (videoEl) {
+                videoEl.remove();
+                updateGridSizing();
+            }
+            networkStatus.innerText = "Participant left";
+        }
+
+        async function sendSignal(payload) {
+            payload.from = myUserId;
+            await addDoc(collection(db, "calls", currentRoomId, "signals"), payload);
+        }
+
+        function updateGridSizing() {
+            const count = remoteVideosGrid.children.length;
+            remoteVideosGrid.setAttribute('data-count', count.toString());
+        }
+
+        async function hangUp() {
+            if (currentRoomId) {
+                const myParticipantRef = doc(db, "calls", currentRoomId, "participants", myUserId);
+                await deleteDoc(myParticipantRef).catch(console.error);
+                
+                if (Object.keys(peerConnections).length === 0) {
+                    await deleteDoc(doc(db, "calls", currentRoomId)).catch(console.error);
+                }
+            }
+
+            Object.keys(peerConnections).forEach(handleParticipantLeft);
+            if (participantsUnsubscribe) participantsUnsubscribe();
+            if (signalsUnsubscribe) signalsUnsubscribe();
+            
+            currentRoomId = null;
+            networkStatus.innerText = "";
+            networkStatus.classList.remove("text-red-500", "text-green-500");
+            
+            callScreen.classList.add('hidden');
+            callScreen.classList.remove('flex');
+            lobbyScreen.classList.remove('hidden');
+            lobbyScreen.classList.add('flex');
+        }
+
+        document.getElementById('joinBtn').addEventListener('click', () => {
+            const code = roomCodeInput.value.trim();
+            if (code.length > 0) joinRoom(code);
+        });
+
+        document.getElementById('hangupBtn').addEventListener('click', hangUp);
+
+        document.getElementById('muteBtn').addEventListener('click', (e) => {
+            isAudioMuted = !isAudioMuted;
+            localStream.getAudioTracks().forEach(t => t.enabled = !isAudioMuted);
+            e.target.innerText = isAudioMuted ? "🔇 Unmute" : "🎤 Mute";
+            e.target.classList.toggle('bg-red-600', isAudioMuted);
+            e.target.classList.toggle('bg-gray-800', !isAudioMuted);
+        });
+
+        document.getElementById('videoBtn').addEventListener('click', (e) => {
+            isVideoMuted = !isVideoMuted;
+            localStream.getVideoTracks().forEach(t => t.enabled = !isVideoMuted);
+            e.target.innerText = isVideoMuted ? "📸 Cam On" : "📸 Cam Off";
+            e.target.classList.toggle('bg-red-600', isVideoMuted);
+            e.target.classList.toggle('bg-gray-800', !isVideoMuted);
+        });
+
+        initLocalMedia();
+
+        window.addEventListener('beforeunload', hangUp);
+    </script>
+</body>
+</html>
