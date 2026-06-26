@@ -179,24 +179,19 @@
         let participantsUnsubscribe = null;
         let signalsUnsubscribe = null;
 
-        // THE FIX: Enforce Unified Plan and add TCP TURN fallback for strict firewalls
+        // THE FIX: Provide multiple routes and specifically include TLS-Encrypted TURN (turns:) to bypass Deep Packet Inspection
         const ICE_SERVERS = { 
             sdpSemantics: 'unified-plan',
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
                 { urls: 'stun:stun1.l.google.com:19302' },
                 { 
-                    urls: 'turn:openrelay.metered.ca:80',
-                    username: 'openrelayproject',
-                    credential: 'openrelayproject'
-                },
-                { 
-                    urls: 'turn:openrelay.metered.ca:443',
-                    username: 'openrelayproject',
-                    credential: 'openrelayproject'
-                },
-                { 
-                    urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+                    urls: [
+                        'turn:openrelay.metered.ca:80',
+                        'turn:openrelay.metered.ca:443',
+                        'turn:openrelay.metered.ca:443?transport=tcp',
+                        'turns:openrelay.metered.ca:443?transport=tcp' // TLS Encrypted Video - Fools firewalls into seeing standard HTTPS!
+                    ],
                     username: 'openrelayproject',
                     credential: 'openrelayproject'
                 }
@@ -217,7 +212,7 @@
         const availableRoomsContainer = document.getElementById('availableRoomsContainer');
         const availableRoomsList = document.getElementById('availableRoomsList');
 
-        // NEW: Listen for active rooms globally to show in the lobby
+        // Listen for active rooms globally to show in the lobby
         onSnapshot(collection(db, "calls"), (snapshot) => {
             const rooms = [];
             snapshot.forEach((doc) => {
