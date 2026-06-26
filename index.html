@@ -105,6 +105,7 @@
             <input type="text" id="roomCodeInput" placeholder="Enter 4-digit code" class="px-6 py-3 rounded-lg bg-gray-800 text-white text-2xl font-bold text-center border focus:outline-none focus:border-blue-500 w-64">
             <button id="joinBtn" class="px-8 py-3 bg-blue-500 hover:bg-blue-600 rounded-lg text-xl font-bold transition-colors w-64">Start / Join</button>
             
+            <!-- NEW: Dynamic Active Rooms List -->
             <div id="availableRoomsContainer" class="hidden mt-6 flex flex-col items-center">
                 <span class="text-gray-400 mb-4 text-lg">Or quickly join an active call:</span>
                 <div id="availableRoomsList" class="flex gap-4 flex-wrap justify-center"></div>
@@ -123,6 +124,7 @@
         <div class="fixed bottom-0 left-0 right-0 h-24 bg-gradient-to-t from-black to-transparent flex items-center justify-center gap-4 pb-4 z-50">
             <button id="muteBtn" class="px-6 py-3 bg-gray-800 hover:bg-gray-700 rounded-full font-bold">🎤 Mute</button>
             <button id="videoBtn" class="px-6 py-3 bg-gray-800 hover:bg-gray-700 rounded-full font-bold">📸 Cam Off</button>
+            <!-- Toggle indicates the ACTION you can take (Switch to Speaker) -->
             <button id="layoutBtn" class="px-6 py-3 bg-purple-600 hover:bg-purple-700 rounded-full font-bold text-white transition-colors">🗣 Speaker View</button>
             <button id="hangupBtn" class="px-6 py-3 bg-red-600 hover:bg-red-700 rounded-full font-bold">❌ Hang Up</button>
         </div>
@@ -138,6 +140,9 @@
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, query, where, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
+        // ==========================================
+        // Firebase Config
+        // ==========================================
         const firebaseConfig = {
             apiKey: "AIzaSyDgmFflkwG7QJy48BmUSr5hNRbcuXpWi04",
             authDomain: "capsulemeet.firebaseapp.com",
@@ -146,10 +151,12 @@
             messagingSenderId: "764330194233",
             appId: "1:764330194233:android:a6a4cce724208b355824e8"
         };
+        // ==========================================
 
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
+        // Persistent Web Identity
         let myUserId = localStorage.getItem('capsulemeet_user_id');
         if (!myUserId) {
             myUserId = crypto.randomUUID();
@@ -161,8 +168,8 @@
         let isAudioMuted = false;
         let isVideoMuted = false;
         
-        // NEW: Layout Control State
-        let layoutMode = 'GRID';
+        // Layout Control State
+        let layoutMode = 'GRID'; // Grid is default
         let highlightedParticipantId = null;
         
         const peerConnections = {};
@@ -172,10 +179,12 @@
         let participantsUnsubscribe = null;
         let signalsUnsubscribe = null;
 
-        // THE FIX: Add TURN servers to bypass international firewalls and strict NATs
+        // THE FIX: Enforce Unified Plan and add TCP TURN fallback for strict firewalls
         const ICE_SERVERS = { 
+            sdpSemantics: 'unified-plan',
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
                 { 
                     urls: 'turn:openrelay.metered.ca:80',
                     username: 'openrelayproject',
@@ -183,6 +192,11 @@
                 },
                 { 
                     urls: 'turn:openrelay.metered.ca:443',
+                    username: 'openrelayproject',
+                    credential: 'openrelayproject'
+                },
+                { 
+                    urls: 'turn:openrelay.metered.ca:443?transport=tcp',
                     username: 'openrelayproject',
                     credential: 'openrelayproject'
                 }
@@ -203,7 +217,7 @@
         const availableRoomsContainer = document.getElementById('availableRoomsContainer');
         const availableRoomsList = document.getElementById('availableRoomsList');
 
-        // Listen for active rooms globally to show in the lobby
+        // NEW: Listen for active rooms globally to show in the lobby
         onSnapshot(collection(db, "calls"), (snapshot) => {
             const rooms = [];
             snapshot.forEach((doc) => {
@@ -212,7 +226,7 @@
             
             if (rooms.length > 0) {
                 availableRoomsContainer.classList.remove('hidden');
-                availableRoomsList.innerHTML = '';
+                availableRoomsList.innerHTML = ''; // Clear old buttons
                 rooms.forEach(roomId => {
                     const btn = document.createElement('button');
                     btn.className = "px-6 py-2 bg-green-600 hover:bg-green-700 rounded-lg text-white font-bold transition-colors";
@@ -302,7 +316,7 @@
             pc.oniceconnectionstatechange = () => {
                 networkStatus.innerText = `Network: ${pc.iceConnectionState}`;
                 if (pc.iceConnectionState === "failed") {
-                    networkStatus.innerText = "Network: FAILED (Try Cellular Data!)";
+                    networkStatus.innerText = "Network: FAILED (Check Firewall)";
                     networkStatus.classList.add("text-red-500");
                 } else if (pc.iceConnectionState === "connected") {
                     networkStatus.classList.remove("text-red-500");
@@ -330,7 +344,7 @@
                     videoEl.autoplay = true;
                     videoEl.setAttribute('playsinline', ''); 
                     
-                    // NEW: Allow swapping speakers by clicking a video
+                    // Allow swapping speakers by clicking a video
                     videoEl.onclick = () => {
                         if (layoutMode === 'SPEAKER') {
                             highlightedParticipantId = participantId;
@@ -432,7 +446,7 @@
             await addDoc(collection(db, "calls", currentRoomId, "signals"), payload);
         }
 
-        // NEW: Layout Control Functions
+        // Layout Control Functions
         function updateGridSizing() {
             const count = remoteVideosGrid.children.length;
             remoteVideosGrid.setAttribute('data-count', count.toString());
@@ -444,7 +458,6 @@
             if (videos.length === 0) return;
 
             if (layoutMode === 'SPEAKER') {
-                // Determine who is highlighted, default to first person if unset
                 if (!highlightedParticipantId || !document.getElementById(`video-${highlightedParticipantId}`)) {
                     highlightedParticipantId = videos[0].id.replace('video-', '');
                 }
@@ -457,7 +470,6 @@
                     }
                 });
             } else {
-                // Clear any speaker highlights for standard Grid Mode
                 videos.forEach(v => v.classList.remove('main-speaker'));
             }
         }
@@ -474,7 +486,7 @@
                 e.target.innerText = "🗣 Speaker View";
                 callScreen.classList.remove('layout-speaker');
                 callScreen.classList.add('layout-grid');
-                highlightedParticipantId = null; // Reset highlight
+                highlightedParticipantId = null; 
             }
             updateLayout();
         });
