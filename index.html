@@ -8,7 +8,6 @@
     <style>
         body { background-color: #000; color: #fff; font-family: system-ui, -apple-system, sans-serif; overflow: hidden; }
         
-        /* Base Video Container Setup */
         #remoteVideos {
             width: 100%;
             height: calc(100vh - 120px);
@@ -21,14 +20,10 @@
             transition: all 0.3s ease;
         }
 
-        /* ================================== */
-        /* GRID MODE (Default)                */
-        /* ================================== */
         .layout-grid #remoteVideos {
             display: grid;
             gap: 1rem;
         }
-        /* Dynamic grid sizing based on child count */
         .layout-grid #remoteVideos[data-count="1"] { grid-template-columns: 1fr; }
         .layout-grid #remoteVideos[data-count="2"] { grid-template-columns: 1fr 1fr; }
         .layout-grid #remoteVideos[data-count="3"], .layout-grid #remoteVideos[data-count="4"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
@@ -38,9 +33,6 @@
             object-fit: contain;
         }
 
-        /* ================================== */
-        /* SPEAKER MODE                       */
-        /* ================================== */
         .layout-speaker #remoteVideos {
             display: flex;
             justify-content: center;
@@ -78,7 +70,6 @@
             transform: none;
         }
 
-        /* Local Video Picture-in-Picture */
         .local-video-container {
             position: fixed;
             bottom: 120px;
@@ -95,7 +86,6 @@
 </head>
 <body>
 
-    <!-- Lobby Screen -->
     <div id="lobbyScreen" class="flex flex-col items-center justify-center min-h-screen">
         <h1 class="text-4xl font-bold mb-8">CapsuleMeet Web</h1>
         <div id="setupMessage" class="text-gray-400 mb-6 text-xl">Requesting camera permissions...</div>
@@ -105,7 +95,6 @@
             <input type="text" id="roomCodeInput" placeholder="Enter 4-digit code" class="px-6 py-3 rounded-lg bg-gray-800 text-white text-2xl font-bold text-center border focus:outline-none focus:border-blue-500 w-64">
             <button id="joinBtn" class="px-8 py-3 bg-blue-500 hover:bg-blue-600 rounded-lg text-xl font-bold transition-colors w-64">Start / Join</button>
             
-            <!-- NEW: Dynamic Active Rooms List -->
             <div id="availableRoomsContainer" class="hidden mt-6 flex flex-col items-center">
                 <span class="text-gray-400 mb-4 text-lg">Or quickly join an active call:</span>
                 <div id="availableRoomsList" class="flex gap-4 flex-wrap justify-center"></div>
@@ -113,7 +102,6 @@
         </div>
     </div>
 
-    <!-- Active Call Screen (Defaults to layout-grid) -->
     <div id="callScreen" class="hidden flex-col min-h-screen layout-grid">
         <div id="remoteVideos" data-count="0"></div>
         
@@ -124,7 +112,6 @@
         <div class="fixed bottom-0 left-0 right-0 h-24 bg-gradient-to-t from-black to-transparent flex items-center justify-center gap-4 pb-4 z-50">
             <button id="muteBtn" class="px-6 py-3 bg-gray-800 hover:bg-gray-700 rounded-full font-bold">🎤 Mute</button>
             <button id="videoBtn" class="px-6 py-3 bg-gray-800 hover:bg-gray-700 rounded-full font-bold">📸 Cam Off</button>
-            <!-- Toggle indicates the ACTION you can take (Switch to Speaker) -->
             <button id="layoutBtn" class="px-6 py-3 bg-purple-600 hover:bg-purple-700 rounded-full font-bold text-white transition-colors">🗣 Speaker View</button>
             <button id="hangupBtn" class="px-6 py-3 bg-red-600 hover:bg-red-700 rounded-full font-bold">❌ Hang Up</button>
         </div>
@@ -135,14 +122,10 @@
         </div>
     </div>
 
-    <!-- The WebRTC + Firebase Engine -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, query, where, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // ==========================================
-        // Firebase Config
-        // ==========================================
         const firebaseConfig = {
             apiKey: "AIzaSyDgmFflkwG7QJy48BmUSr5hNRbcuXpWi04",
             authDomain: "capsulemeet.firebaseapp.com",
@@ -151,25 +134,23 @@
             messagingSenderId: "764330194233",
             appId: "1:764330194233:android:a6a4cce724208b355824e8"
         };
-        // ==========================================
 
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        // Persistent Web Identity
         let myUserId = localStorage.getItem('capsulemeet_user_id');
         if (!myUserId) {
             myUserId = crypto.randomUUID();
             localStorage.setItem('capsulemeet_user_id', myUserId);
         }
+        console.log(`[WebRTC DEBUG] My Identity Initialized: ${myUserId}`);
 
         let currentRoomId = null;
         let localStream = null;
         let isAudioMuted = false;
         let isVideoMuted = false;
         
-        // Layout Control State
-        let layoutMode = 'GRID'; // Grid is default
+        let layoutMode = 'GRID';
         let highlightedParticipantId = null;
         
         const peerConnections = {};
@@ -179,19 +160,29 @@
         let participantsUnsubscribe = null;
         let signalsUnsubscribe = null;
 
-        // THE FIX: Provide multiple routes and specifically include TLS-Encrypted TURN (turns:) to bypass Deep Packet Inspection
         const ICE_SERVERS = { 
             sdpSemantics: 'unified-plan',
+            iceCandidatePoolSize: 10,
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun.cloudflare.com:3478' },
                 { 
-                    urls: [
-                        'turn:openrelay.metered.ca:80',
-                        'turn:openrelay.metered.ca:443',
-                        'turn:openrelay.metered.ca:443?transport=tcp',
-                        'turns:openrelay.metered.ca:443?transport=tcp' // TLS Encrypted Video - Fools firewalls into seeing standard HTTPS!
-                    ],
+                    urls: 'turn:openrelay.metered.ca:80',
+                    username: 'openrelayproject',
+                    credential: 'openrelayproject'
+                },
+                { 
+                    urls: 'turn:openrelay.metered.ca:443',
+                    username: 'openrelayproject',
+                    credential: 'openrelayproject'
+                },
+                { 
+                    urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+                    username: 'openrelayproject',
+                    credential: 'openrelayproject'
+                },
+                { 
+                    urls: 'turns:openrelay.metered.ca:443?transport=tcp',
                     username: 'openrelayproject',
                     credential: 'openrelayproject'
                 }
@@ -212,7 +203,6 @@
         const availableRoomsContainer = document.getElementById('availableRoomsContainer');
         const availableRoomsList = document.getElementById('availableRoomsList');
 
-        // Listen for active rooms globally to show in the lobby
         onSnapshot(collection(db, "calls"), (snapshot) => {
             const rooms = [];
             snapshot.forEach((doc) => {
@@ -221,7 +211,7 @@
             
             if (rooms.length > 0) {
                 availableRoomsContainer.classList.remove('hidden');
-                availableRoomsList.innerHTML = ''; // Clear old buttons
+                availableRoomsList.innerHTML = '';
                 rooms.forEach(roomId => {
                     const btn = document.createElement('button');
                     btn.className = "px-6 py-2 bg-green-600 hover:bg-green-700 rounded-lg text-white font-bold transition-colors";
@@ -245,16 +235,19 @@
                 setupMessage.classList.add('hidden');
                 joinControls.classList.remove('hidden');
                 joinControls.classList.add('flex');
+                console.log("[WebRTC DEBUG] Local Media Initialized successfully.");
             } catch (e) {
-                console.error("Camera error:", e);
+                console.error("[WebRTC ERROR] Camera error:", e);
                 setupMessage.innerText = "Error accessing camera/microphone. Please allow permissions. Make sure you are using HTTPS.";
             }
         }
 
         async function joinRoom(roomId) {
+            console.log(`[WebRTC DEBUG] Joining Room: ${roomId}`);
             currentRoomId = roomId;
             roomBadge.innerText = `Room: ${roomId}`;
             networkStatus.innerText = "Connecting to signaling server...";
+            networkStatus.className = "text-xs text-gray-400";
             
             lobbyScreen.classList.add('hidden');
             callScreen.classList.remove('hidden');
@@ -272,9 +265,11 @@
                     if (participantId === myUserId) return;
 
                     if (change.type === "added" || change.type === "modified") {
+                        console.log(`[WebRTC DEBUG] Participant Joined/Modified: ${participantId}`);
                         handleParticipantJoined(participantId);
                     }
                     if (change.type === "removed") {
+                        console.log(`[WebRTC DEBUG] Participant Removed: ${participantId}`);
                         handleParticipantLeft(participantId);
                     }
                 });
@@ -296,31 +291,60 @@
             const pc = createPeerConnection(participantId);
             
             if (myUserId > participantId) {
+                console.log(`[WebRTC DEBUG] I am the CALLER for ${participantId}. Creating Offer...`);
                 const offer = await pc.createOffer();
                 await pc.setLocalDescription(offer);
+                console.log(`[WebRTC DEBUG] Local Description set. Sending Offer to ${participantId}.`);
                 sendSignal({ to: participantId, type: "offer", sdp: pc.localDescription.sdp });
+            } else {
+                console.log(`[WebRTC DEBUG] I am the CALLEE for ${participantId}. Waiting for Offer...`);
             }
         }
 
         function createPeerConnection(participantId) {
+            console.log(`[WebRTC DEBUG] Initializing RTCPeerConnection for ${participantId}`);
             const pc = new RTCPeerConnection(ICE_SERVERS);
             peerConnections[participantId] = pc;
 
-            localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+            localStream.getTracks().forEach(track => {
+                console.log(`[WebRTC DEBUG] Adding local track (${track.kind}) to PeerConnection`);
+                pc.addTrack(track, localStream);
+            });
+
+            // ----------------------------------------------------
+            // HEAVY DEBUGGING LISTENERS
+            // ----------------------------------------------------
+            pc.onicegatheringstatechange = () => {
+                console.log(`[WebRTC DEBUG] ICE Gathering State: ${pc.iceGatheringState}`);
+            };
+
+            pc.onsignalingstatechange = () => {
+                console.log(`[WebRTC DEBUG] Signaling State: ${pc.signalingState}`);
+            };
 
             pc.oniceconnectionstatechange = () => {
-                networkStatus.innerText = `Network: ${pc.iceConnectionState}`;
+                console.log(`[WebRTC DEBUG] ICE Connection State: ${pc.iceConnectionState}`);
+                
                 if (pc.iceConnectionState === "failed") {
                     networkStatus.innerText = "Network: FAILED (Check Firewall)";
-                    networkStatus.classList.add("text-red-500");
-                } else if (pc.iceConnectionState === "connected") {
-                    networkStatus.classList.remove("text-red-500");
-                    networkStatus.classList.add("text-green-500");
+                    networkStatus.className = "text-xs font-bold text-red-500";
+                    console.error(`[WebRTC DEBUG] FATAL: ICE Connection failed for ${participantId}`);
+                } else if (pc.iceConnectionState === "disconnected") {
+                    networkStatus.innerText = "Network: Disconnected - Reconnecting...";
+                    networkStatus.className = "text-xs font-bold text-orange-400";
+                    console.warn(`[WebRTC DEBUG] WARNING: ICE Connection disconnected for ${participantId}`);
+                } else if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
+                    networkStatus.innerText = "Network: Connected securely";
+                    networkStatus.className = "text-xs font-bold text-green-500";
+                    console.log(`[WebRTC DEBUG] SUCCESS: WebRTC connected to ${participantId}`);
+                } else {
+                    networkStatus.innerText = `Network: ${pc.iceConnectionState}`;
                 }
             };
 
             pc.onicecandidate = (event) => {
                 if (event.candidate) {
+                    console.log(`[WebRTC DEBUG] Generated ICE Candidate: protocol=${event.candidate.protocol}, type=${event.candidate.type}, address=${event.candidate.address}:${event.candidate.port}`);
                     sendSignal({
                         to: participantId,
                         type: "candidate",
@@ -328,18 +352,21 @@
                         sdpMLineIndex: event.candidate.sdpMLineIndex,
                         candidate: event.candidate.candidate
                     });
+                } else {
+                    console.log(`[WebRTC DEBUG] ICE Candidate gathering COMPLETE.`);
                 }
             };
 
             pc.ontrack = (event) => {
+                console.log(`[WebRTC DEBUG] Received remote track (${event.track.kind}) from ${participantId}`);
                 let videoEl = document.getElementById(`video-${participantId}`);
                 if (!videoEl) {
+                    console.log(`[WebRTC DEBUG] Creating new <video> element for ${participantId}`);
                     videoEl = document.createElement('video');
                     videoEl.id = `video-${participantId}`;
                     videoEl.autoplay = true;
                     videoEl.setAttribute('playsinline', ''); 
                     
-                    // Allow swapping speakers by clicking a video
                     videoEl.onclick = () => {
                         if (layoutMode === 'SPEAKER') {
                             highlightedParticipantId = participantId;
@@ -352,8 +379,10 @@
                 }
                 
                 if (event.streams && event.streams[0]) {
+                    console.log(`[WebRTC DEBUG] Attaching stream array to video element`);
                     videoEl.srcObject = event.streams[0];
                 } else {
+                    console.log(`[WebRTC DEBUG] Manually building MediaStream for track`);
                     if (!remoteStreams[participantId]) {
                         remoteStreams[participantId] = new MediaStream();
                     }
@@ -362,7 +391,10 @@
                 }
 
                 videoEl.onloadedmetadata = () => {
-                    videoEl.play().catch(console.error);
+                    console.log(`[WebRTC DEBUG] Remote video metadata loaded. Forcing play().`);
+                    videoEl.play().catch(e => {
+                        console.error(`[WebRTC ERROR] Video Playback blocked:`, e);
+                    });
                 };
             };
 
@@ -371,20 +403,25 @@
 
         async function handleIncomingSignal(data, docRef) {
             const { from: participantId, type } = data;
+            console.log(`[WebRTC DEBUG] Incoming Signal: [${type}] from ${participantId}`);
             
             deleteDoc(docRef).catch(console.error);
 
             const pc = peerConnections[participantId] || createPeerConnection(participantId);
 
             if (type === "offer") {
+                console.log(`[WebRTC DEBUG] Setting Remote Description (Offer)`);
                 await pc.setRemoteDescription(new RTCSessionDescription({ type: "offer", sdp: data.sdp }));
                 drainPendingIceCandidates(participantId, pc); 
                 
+                console.log(`[WebRTC DEBUG] Creating Answer`);
                 const answer = await pc.createAnswer();
                 await pc.setLocalDescription(answer);
+                console.log(`[WebRTC DEBUG] Sending Answer to ${participantId}`);
                 sendSignal({ to: participantId, type: "answer", sdp: pc.localDescription.sdp });
             } 
             else if (type === "answer") {
+                console.log(`[WebRTC DEBUG] Setting Remote Description (Answer)`);
                 await pc.setRemoteDescription(new RTCSessionDescription({ type: "answer", sdp: data.sdp }));
                 drainPendingIceCandidates(participantId, pc); 
             } 
@@ -396,8 +433,10 @@
                 });
                 
                 if (pc.remoteDescription && pc.remoteDescription.type) {
-                    await pc.addIceCandidate(candidate).catch(console.error);
+                    console.log(`[WebRTC DEBUG] Applying ICE Candidate instantly`);
+                    await pc.addIceCandidate(candidate).catch(e => console.error(`[WebRTC ERROR] Adding ICE Candidate:`, e));
                 } else {
+                    console.log(`[WebRTC DEBUG] Queueing ICE Candidate (Remote description not set yet)`);
                     if (!pendingIceCandidates[participantId]) pendingIceCandidates[participantId] = [];
                     pendingIceCandidates[participantId].push(candidate);
                 }
@@ -405,15 +444,17 @@
         }
 
         async function drainPendingIceCandidates(participantId, pc) {
-            if (pendingIceCandidates[participantId]) {
+            if (pendingIceCandidates[participantId] && pendingIceCandidates[participantId].length > 0) {
+                console.log(`[WebRTC DEBUG] Draining ${pendingIceCandidates[participantId].length} queued ICE candidates`);
                 for (const candidate of pendingIceCandidates[participantId]) {
-                    await pc.addIceCandidate(candidate).catch(console.error);
+                    await pc.addIceCandidate(candidate).catch(e => console.error(`[WebRTC ERROR] Draining ICE Candidate:`, e));
                 }
                 pendingIceCandidates[participantId] = [];
             }
         }
 
         function handleParticipantLeft(participantId) {
+            console.log(`[WebRTC DEBUG] Cleaning up resources for disconnected user: ${participantId}`);
             if (peerConnections[participantId]) {
                 peerConnections[participantId].close();
                 delete peerConnections[participantId];
@@ -441,7 +482,6 @@
             await addDoc(collection(db, "calls", currentRoomId, "signals"), payload);
         }
 
-        // Layout Control Functions
         function updateGridSizing() {
             const count = remoteVideosGrid.children.length;
             remoteVideosGrid.setAttribute('data-count', count.toString());
@@ -469,7 +509,6 @@
             }
         }
 
-        // Layout Toggle Event Listener
         document.getElementById('layoutBtn').addEventListener('click', (e) => {
             if (layoutMode === 'GRID') {
                 layoutMode = 'SPEAKER';
@@ -487,6 +526,7 @@
         });
 
         async function hangUp() {
+            console.log(`[WebRTC DEBUG] Hanging up!`);
             if (currentRoomId) {
                 const myParticipantRef = doc(db, "calls", currentRoomId, "participants", myUserId);
                 await deleteDoc(myParticipantRef).catch(console.error);
@@ -503,9 +543,8 @@
             currentRoomId = null;
             highlightedParticipantId = null;
             networkStatus.innerText = "";
-            networkStatus.classList.remove("text-red-500", "text-green-500");
+            networkStatus.className = "text-xs text-gray-400";
             
-            // Reset to default Grid Mode
             layoutMode = 'GRID';
             document.getElementById('layoutBtn').innerText = "🗣 Speaker View";
             callScreen.classList.remove('layout-speaker');
